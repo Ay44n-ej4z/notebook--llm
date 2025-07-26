@@ -1,13 +1,7 @@
 // src/components/ChatBox.tsx
 import React, { useState } from "react";
 import { FiSend } from "react-icons/fi";
-import { GiNextButton, GiPreviousButton } from "react-icons/gi";
 import { HiOutlineDocumentText } from "react-icons/hi";
-import { pdfjs, Document, Page } from "react-pdf";
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import "react-pdf/dist/Page/TextLayer.css";
-
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
 
 type Props = {
   chunks: { text: string; page: number }[];
@@ -15,83 +9,52 @@ type Props = {
   totalPages: number;
 };
 
-const cosineSimilarity = (vecA: number[], vecB: number[]) => {
-  const dot = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
-  const magA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
-  const magB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
-  return dot / (magA * magB);
-};
 
-const ChatBox: React.FC<Props> = ({ chunks, pdfUrl, totalPages }) => {
+const ChatBox: React.FC<Props> = ({ chunks, pdfUrl }) => {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<
     { role: string; text: string; cites?: number[] }[]
   >([]);
-  const [pageNumber, setPageNumber] = useState(1);
 
   const handleSend = async () => {
     if (!input.trim()) return;
 
-    setMessages([...messages, { role: "user", text: input }]);
+    const userMessage = { role: "user", text: input };
+
+    // Funny loaders list
+    const funnyLoaders = [
+      "🤖 Thinking really hard... maybe too hard... 🧠💥",
+      "📚 Reading the whole PDF like it's a bedtime story...",
+      "🧠 Crunching numbers and flipping pages...",
+      "👓 Looking for answers with microscopic precision...",
+      "☕ Brewing the perfect answer... stand by!",
+      "🕵️ Investigating your question like Sherlock Holmes...",
+      "👾 Fighting document goblins to extract truth...",
+    ];
+    const randomLoader =
+      funnyLoaders[Math.floor(Math.random() * funnyLoaders.length)];
+
+    const loadingMessage = { role: "assistant", text: randomLoader };
+
+    // Show user message + funny assistant loading message
+    setMessages((prev) => [...prev, userMessage, loadingMessage]);
 
     try {
-      const embeddingRes = await fetch("https://api.openai.com/v1/embeddings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          input,
-          model: "text-embedding-3-small",
-        }),
-      });
-
-      const embeddingData = await embeddingRes.json();
-      const embedding = embeddingData?.data?.[0]?.embedding;
-      if (!embedding) throw new Error("Failed to get embedding");
-
-      const scoredChunks = await Promise.all(
-        chunks.map(async (chunk) => {
-          const chunkEmbeddingRes = await fetch(
-            "https://api.openai.com/v1/embeddings",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${import.meta.env.VITE_OPENAI_API_KEY}`,
-              },
-              body: JSON.stringify({
-                input: chunk.text,
-                model: "text-embedding-3-small",
-              }),
-            }
-          );
-
-          const chunkData = await chunkEmbeddingRes.json();
-          const chunkEmbedding = chunkData?.data?.[0]?.embedding;
-
-          const score = cosineSimilarity(embedding, chunkEmbedding);
-          return { ...chunk, score };
-        })
-      );
-
-      const topChunks = scoredChunks
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
-
-      const prompt = `Use the following context to answer:\n\n${topChunks
+      const context = chunks
         .map((c) => `Page ${c.page}: ${c.text}`)
-        .join("\n\n")}\n\nQ: ${input}`;
+        .join("\n\n");
 
-      const completionRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      const prompt = `${input}:\n\n${context}\n\nQuestion: ${input}`;
+
+      const completionRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
+          Authorization: `Bearer ${import.meta.env.VITE_MISTRALAY_API_KEY}`,
           "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_OPENAI_API_KEY}`,
+          "X-Title": "PDF Q&A ChatBox",
         },
         body: JSON.stringify({
-          model: "gpt-3.5-turbo",
+          model: "mistralai/mistral-7b-instruct:free",
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -101,21 +64,32 @@ const ChatBox: React.FC<Props> = ({ chunks, pdfUrl, totalPages }) => {
 
       if (!messageContent) throw new Error("No message content in completion");
 
+      // Replace loading message with actual response
       setMessages((prev) => [
-        ...prev,
+        ...prev.slice(0, -1), // remove the loading message
         {
           role: "assistant",
           text: messageContent,
-          cites: topChunks.map((c) => c.page),
+          cites: [],
         },
       ]);
 
       setInput("");
     } catch (err) {
       console.error("Error during chat handling:", err);
-      alert("Something went wrong.");
+
+      setMessages((prev) => [
+        ...prev.slice(0, -1), // remove loading message
+        {
+          role: "assistant",
+          text: "⚠️ Something went wrong. Try again in a moment.",
+        },
+      ]);
     }
   };
+
+
+
 
   return (
     <div className="w-full h-[80vh] flex rounded-xl shadow-xl overflow-hidden">
@@ -142,8 +116,7 @@ const ChatBox: React.FC<Props> = ({ chunks, pdfUrl, totalPages }) => {
             {messages.map((msg, idx) => (
               <div
                 key={idx}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"
-                  }`}
+                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 <div
                   className={`flex  items-center max-w-[90%] p-3 rounded-lg shadow-sm ${msg.role === "user"
@@ -151,11 +124,9 @@ const ChatBox: React.FC<Props> = ({ chunks, pdfUrl, totalPages }) => {
                     : "bg-slate-600"
                     }`}
                 >
-                  {/* Avatar */}
                   <div className="text-2xl bg-gray-100 rounded-full">
                     {msg.role === "user" ? "🧑" : "🤖"}
                   </div>
-                  {/* Message Text */}
                   <div className="text-sm m-2 text-gray-100 whitespace-pre-wrap">
                     {msg.text}
                   </div>
@@ -171,6 +142,12 @@ const ChatBox: React.FC<Props> = ({ chunks, pdfUrl, totalPages }) => {
             className="flex-1 bg-[#3b3b3b] px-4 py-2 rounded-2xl shadow-sm focus:outline-none transition-shadow duration-200"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
             placeholder="Ask about the document..."
           />
 
@@ -185,26 +162,16 @@ const ChatBox: React.FC<Props> = ({ chunks, pdfUrl, totalPages }) => {
 
       {/* PDF Panel */}
       <div className="w-[65%] p-4 flex flex-col items-center">
-        <Document file={pdfUrl}>
-          <Page pageNumber={pageNumber} width={500} />
-        </Document>
-        <div className="flex gap-4 mt-4">
-          <button
-            className="px-4 py-2 rounded-lg hover:bg-gray-600 bg-gray-800 hover:cursor-pointer"
-            onClick={() => setPageNumber(Math.max(1, pageNumber - 1))}
-          >
-            <GiPreviousButton />
-          </button>
-          <span>
-            Page {pageNumber} of {totalPages}
-          </span>
-          <button
-            className="px-4 py-2 rounded-lg hover:bg-gray-600 bg-gray-800 hover:cursor-pointer"
-            onClick={() => setPageNumber(Math.min(totalPages, pageNumber + 1))}
-          >
-            <GiNextButton />
-          </button>
-        </div>
+        <iframe
+          src={`${pdfUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+          width="100%"
+          height="100%"
+          className="rounded-lg shadow-inner border-0"
+          title="PDF Viewer"
+        ></iframe>
+        {/* <div className="flex gap-4 mt-4">
+
+        </div> */}
       </div>
     </div>
   );
